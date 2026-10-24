@@ -1,0 +1,78 @@
+steps:
+  # Step 1: Download the repository code
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  # Step 2: Set up Python
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.12"
+      cache: pip
+      cache-dependency-path: |
+        requirements.txt
+        requirements-dev.txt
+
+  # Step 3: Install application and testing dependencies
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      python -m pip install -r requirements-dev.txt
+
+  # Step 4: Run automated tests
+  - name: Run pytest
+    run: python -m pytest -v
+
+  # Step 5: Validate Docker Compose configuration
+  - name: Validate Docker Compose
+    run: docker compose config -q
+
+  # Step 6: Build the Docker image
+  - name: Build Docker image
+    run: docker build -t ci-cd-test:ci .
+
+  # Step 7: Start the container
+  - name: Start Docker container
+    run: |
+      docker run -d \
+        --name ci-cd-test \
+        -p 127.0.0.1:5000:5000 \
+        ci-cd-test:ci
+
+  # Step 8: Wait for the container health check
+  - name: Wait for container health
+    run: |
+      for attempt in $(seq 1 20); do
+        status=$(docker inspect \
+          --format='{{.State.Health.Status}}' ci-cd-test)
+
+        if [ "$status" = "healthy" ]; then
+          echo "Container is healthy"
+          exit 0
+        fi
+
+        if [ "$status" = "unhealthy" ]; then
+          echo "Container is unhealthy"
+          docker logs ci-cd-test
+          exit 1
+        fi
+
+        if [ "$attempt" -eq 20 ]; then
+          echo "Container did not become healthy in time"
+          docker logs ci-cd-test
+          exit 1
+        fi
+
+        sleep 2
+      done
+
+  # Step 9: Test the API health endpoint
+  - name: Test health endpoint
+    run: |
+      python -c "import urllib.request; r = urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5); print(r.read().decode()); assert r.status == 200"
+
+  # Step 10: Clean up the container, even if an earlier step fails
+  - name: Clean up Docker container
+    if: always()
+    run: docker rm -f ci-cd-test || true
++
